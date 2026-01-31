@@ -1,0 +1,107 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import GaussianNB
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+# ──── 1. LOAD FULL DATA ─────────────
+
+df = pd.read_csv('/content/Wholesale customers data.csv')
+
+print("Dataset shape:", df.shape)           # Should be (440, 8)
+
+# ──── 2. DATA QUALITY CHECK (all questions answered) ────────────────────────
+print("\n1. Are there missing values? →", df.isnull().sum().sum(), "→ No missing values, no need to handle.")
+print("\n2. Channel column – valid labels only?", df['Channel'].unique())   # [1 2] → Yes, clean
+print("   → Counts:", df['Channel'].value_counts().to_dict())             # 1:298, 2:142
+print("\n3. All features continuous numerical? → Yes")
+print(df.dtypes)
+print("\n4. Duplicates?", df.duplicated().sum())                           # 0 → clean
+
+# ──── 3. OUTLIERS & EXTREME VALUES ──────────────────────────────────────────
+print("\nExtreme spending values exist? Yes – very strong right skew & outliers")
+
+def count_outliers(col):
+    Q1, Q3 = col.quantile([0.25, 0.75])
+    IQR = Q3 - Q1
+    return ((col < Q1 - 1.5*IQR) | (col > Q3 + 1.5*IQR)).sum()
+
+print("\nOutliers count (1.5 × IQR):")
+for c in ['Fresh','Milk','Grocery','Frozen','Detergents_Paper','Delicassen']:
+    print(f"{c:18} → {count_outliers(df[c])}")
+
+print("\n→ These outliers are real big customers → do NOT remove, but log-transform helps modeling")
+
+# Noisy/outlier data → Gaussian NB assumes normality → outliers + skew badly affect likelihood → lower accuracy
+
+# ──── 4. EDA – Required Visualizations + Key Questions ──────────────────────
+print("\nEDA Insights:")
+
+# Mean spending by channel – strongest differentiator
+print("\nMean spending by Channel (HORECA vs Retail):")
+print(df.groupby('Channel').mean().round(0))
+
+print("\n→ HORECA (1): much higher Fresh & Frozen")
+print("→ Retail (2): much higher Milk, Grocery, Detergents_Paper")
+
+# Distributions → Histograms
+plt.figure(figsize=(15,10))
+for i, col in enumerate(['Fresh','Milk','Grocery','Frozen','Detergents_Paper','Delicassen'], 1):
+    plt.subplot(2,3,i)
+    sns.histplot(df[col], kde=True, bins=40)
+    plt.title(f'{col} Distribution\n(skew = {df[col].skew():.2f})')
+plt.tight_layout()
+plt.show()
+
+# Boxplots
+plt.figure(figsize=(12,6))
+sns.boxplot(data=df[['Fresh','Milk','Grocery','Frozen','Detergents_Paper','Delicassen']], palette='Set2')
+plt.title("Boxplot – All categories show strong right skew + outliers")
+plt.yscale('log')  # easier to see
+plt.show()
+
+# Pairplot (by Channel)
+sns.pairplot(df.drop('Region', axis=1), hue='Channel', palette={1:'royalblue', 2:'darkorange'},
+             diag_kind='kde', corner=True)
+plt.suptitle("Pairplot – Clear separation in Grocery/Detergents vs Fresh", y=1.02)
+plt.show()
+
+# separate data in x and y form for training and testing
+
+X = np.log1p(df.drop(['Channel','Region'], axis=1))   # log1p – fixes skew
+y = df['Channel']
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.25, random_state=42, stratify=y
+)
+
+# Fit Model using GaussianNaiveBayes Algorithm
+
+gnb = GaussianNB()
+gnb.fit(X_train, y_train)
+y_pred = gnb.predict(X_test)
+
+# ──── 6. MODEL EVALUATION ───────────────────────────────────────────────────
+acc = accuracy_score(y_test, y_pred)
+print(f"\nAccuracy: {acc:.1%} (on log-transformed data)")
+
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred, target_names=['HORECA (1)', 'Retail (2)']))
+
+print("\nConfusion Matrix:")
+cm = confusion_matrix(y_test, y_pred)
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=['HORECA','Retail'], yticklabels=['HORECA','Retail'])
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.title('Confusion Matrix')
+plt.show()
+
+
+# Create pickle file 
+
+import pickle
+with open('gnb.pkl', 'wb') as file:
+    pickle.dump(gnb, file)
